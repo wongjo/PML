@@ -1,0 +1,118 @@
+---
+title: "Practical Machine Learning Course Project"
+author: "Jonah Wong"
+date: "11/22/2014"
+output: html_document
+---
+
+##Synopsis  
+This study will examine data collected from personal physical activity monitors in the proceedings paper: *Velloso, E.; Bulling, A.; Gellersen, H.; Ugulino, W.; Fuks, H. Qualitative Activity Recognition of Weight Lifting Exercises. Proceedings of 4th International Conference in Cooperation with SIGCHI (Augmented Human '13) . Stuttgart, Germany: ACM SIGCHI, 2013.* and build a predictive model with cross validation based on the provided training and test datasets to predict the type of activity performed. The method used was random forest with an cross validated expected out of sample error rate of 0.62% , and a 100% project submisison grading.  
+  
+##Question  
+During the study, six subjects participated in a dumbbell lifting exercise, 10 repetitions (or "reps") each, under five different classifications.  
+**Unilateral Dumbbell Biceps Curl**  
+1. A - exactly according to the specification  
+2. B - throwing the elbows to the front  
+3. C - lifting the dumbbell only halfway  
+4. D - lowering the dumbbell only halfway  
+5. E - throwing the hips to the front  
+  
+Class A describes the activity performed according to specification, Classes B through E describes the typical mistakes in how the activity is commonly performed. Read more: (http://groupware.les.inf.puc-rio.br/har#weight_lifting_exercises#ixzz3JpcA2j81)  
+  
+**Based on the accelerometer data collected from the four different points: arm, forearm, elbow, and dumbbell, can we predict the movement class performed during a "rep"?**  
+  
+##Input Data  
+Import the available data, and since the datasets are in two separate files, verify the sets are identical.  
+  
+```{r}
+setwd("/home/wongjo/Documents/Coursera/Data Science Specialization/Practical Machine Learning/Course Project")
+fileUrl_train <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
+fileName_train <- "pml-training.csv"
+fileUrl_test <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"
+fileName_test <- "pml-testing.csv"
+download.file(fileUrl_train, destfile = fileName_train, method = "curl")
+download.file(fileUrl_test, destfile = fileName_test, method = "curl")
+WT_training <- read.csv("pml-training.csv", colClasses = "character", stringsAsFactors = FALSE, na.strings = "NA")
+WT_testing <- read.csv("pml-testing.csv", , colClasses = "character", stringsAsFactors = FALSE, na.strings = "NA")
+
+#Test the column names except the last ones (classe in training, and problem_id test) to see if identical
+colnames_train <- colnames(WT_training)
+colnames_test <- colnames(WT_testing)
+
+all.equal(colnames_train[1:length(colnames_train)-1], colnames_test[1:length(colnames_train)-1])
+```
+  
+Since the training and testing sets are identical, except for the last column, removing columns from the training set would not impact the predictions using the testing set.  
+  
+##Features  
+The first 7 columns would not be useful in predicting the class of movement, since they are categorical or time variables regarding the circumstance of the collection of the data, and not generalizable from the raw monitor data.  
+In addition, columns with NA data would not be helpful to predict non-NA movements.
+
+```{r, warning=FALSE}
+#remove first 7 columns
+WT_training <- WT_training[,-c(1:7)]
+#all other columns in both training and testing are numeric, except classe
+i <- c(rep(TRUE,152),FALSE)
+j <- c(rep(FALSE,7),rep(TRUE,153))
+WT_training[i] <- lapply(WT_training[i], as.numeric)
+WT_testing[j] <- lapply(WT_testing[j], as.numeric)
+WT_training[,153] <- as.factor(WT_training[,153])
+#remove NA columns
+WT_training <- WT_training[, which(as.numeric(colSums(is.na(WT_training))) < 1)] 
+# Show remaining columns to consider for the model.
+colnames(WT_training)
+```
+  
+Examine whether it is feasible to create new covariates from the nonvariability covariates  
+  
+```{r}
+#Load necessary libraries
+library(lattice)
+library(ggplot2)
+library(e1071)
+library(caret)
+library(randomForest)
+library(AppliedPredictiveModeling)
+library(foreach)
+library(iterators)
+library(parallel)
+library(doMC)
+nearZeroVar(WT_training, saveMetrics=TRUE)
+```
+  
+Since all of the near zero variance variables (nsv column) are FALSE, there's no need to eliminate any covariates due to lack of variability.  
+  
+  
+## Algorithm  
+For this classification problem, random forest is most likely the best method:  
+  
+1. There are still 52 input variables to work with. Random forests work well to handle large number of inputs, especially when variable interactions are unknown.  
+2. A random forest has built-in cross-validation producing an unbiased estimate of the forest out-of-sample (OOB) error rate. The OOB error rate can be helpful to fine-tune the forest parameters.  
+3. A random forest can be used to estimate variable importance. This is especially helpful if the goal is to trim down the inputs into a lesser set.  
+4. A random forest handles unscaled variables and categorical variables, thus reducing need for cleaning and transformation processes, both of which could lead to overfitting and noise.  
+5. Individual trees can be isolated from the random forest for examination. This discreteness can help to tell how the predictor arrives at predicted classifications.  
+6. The random forest classification output can be expressed as a probability (trees w classification / total trees) and thus be used as a confidence estimate for each classification.  
+  
+```{r}
+
+#set seed for reproducibility
+set.seed(555)
+#set up standard 60-40 train/test split of the training set
+inTrain <- createDataPartition(y=WT_training$classe,p=0.6, list=FALSE)
+
+training <- WT_training[inTrain,]
+testing <- WT_training[-inTrain,]
+#random forest model fit with preprocessing and cross validation
+modFit <- randomForest(classe~ .,data=training,na.action=na.omit, preProcess=c("center", "scale"), trControl=trainControl(method = "cv", number = 4))
+print(modFit, digits=3)
+
+#Examine accuracy with confusion matrix against the testing set
+predictions <- predict(modFit, newdata=testing)
+print(confusionMatrix(predictions, testing$classe), digits=4)
+
+#Examine against the 20 cases to predict in the final testing set, for submission.
+print(predict(modFit, newdata=WT_testing))
+```
+  
+##Evaluation  
+Cross validating with the 40% of the pml-training set set aside into the "testing" set, the expected out of sample error is (1 - 0.9938) = 0.0062, or 0.62%. Course Project Submission was 100% accurate.  
